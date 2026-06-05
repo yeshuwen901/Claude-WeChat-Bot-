@@ -1,0 +1,17 @@
+.env
+data/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.gstack/
+
+# 角色设定
+character_*.json
+character_*.md
+*角色设定*.txt
+
+# 需求/设计文档
+需求*.md
+*design*.md
+*packaging*.md

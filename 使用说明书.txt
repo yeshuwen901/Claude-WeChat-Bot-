@@ -1,0 +1,174 @@
+============================================================
+  AI 陪聊 Bot 使用说明书  v2.2
+  (基于腾讯 ilink 官方 API)  更新日期: 2026-05-30
+============================================================
+
+【环境要求】
+- Windows 10/11
+- 无需安装 Python 或任何依赖，开箱即用
+- 已注册微信开放平台的 ilink Bot 账号
+
+【一、快速开始（只需 3 步）】
+
+  1. 双击 clawbot.exe
+     → 自动在同目录创建 data\ 文件夹和 .env 配置文件
+     → 自动打开浏览器访问管理面板 http://localhost:8080
+
+  2. 在管理面板中配置 API Key
+     → 获取地址：https://api.deepseek.com（注册后创建 API Key）
+     → 也可使用 Anthropic API：https://console.anthropic.com
+
+  3. 点击「生成二维码」，用微信扫码登录
+     → 扫码后点击手机上的「确认登录」
+     → 顶部状态灯变绿，显示「已连接」即完成
+
+  完成！现在让朋友给你发微信消息，Bot 会自动回复。
+
+【二、配置说明】
+
+  所有配置均可在管理面板 (http://localhost:8080) 中修改，无需手动编辑文件。
+
+  管理面板首页（账号设置）：
+
+  1. API Key —— AI 对话服务密钥（必填）
+     - DeepSeek：https://api.deepseek.com
+     - Anthropic（Claude）：https://console.anthropic.com
+
+  2. 图片识别 API (DashScope) —— 阿里云 DashScope API Key（识图功能，可选）
+     获取地址：https://dashscope.console.aliyun.com/apiKey
+     用途：让 Bot 能看懂用户发送的图片
+
+  3. AI 模型 —— 选择使用的模型
+     - deepseek-chat（推荐，性价比高）
+     - claude-sonnet-4-20250514
+     - claude-opus-4-20250514
+
+  4. 测试聊天 —— 配置完 Key 后在此测试 AI 回复效果
+
+  高级配置（编辑 exe 同目录下的 .env 文件）：
+
+    ANTHROPIC_API_KEY       AI API Key
+    ANTHROPIC_MODEL         模型名称，默认 claude-sonnet-4-20250514
+    ANTHROPIC_BASE_URL      自定义 API 地址（使用 DeepSeek 时需要）
+    ANTHROPIC_MAX_TOKENS    最大回复长度，默认 4096
+    ANTHROPIC_TEMPERATURE   回复随机性 0-1，默认 0.7
+    BOT_NAME                机器人名称，默认 Claude
+    CONVERSATION_MAX_TURNS  保持记忆的对话轮数，默认 20
+    ADMIN_PORT              管理面板端口，默认 8080
+    LOG_LEVEL               日志级别，默认 INFO
+
+【三、启动与停止】
+
+  启动：
+    - 双击 clawbot.exe
+    - 浏览器自动打开 http://localhost:8080
+    - 已登录的 Bot 会自动加载上次会话（会话有效期约 7 天）
+
+  停止：
+    - 直接关闭命令行窗口
+    - 或在窗口内按 Ctrl+C
+
+  重启：
+    - 再次双击 clawbot.exe 即可
+
+【四、管理面板详解】
+
+  标签页         功能
+  ──────────────────────────────────────────────────
+  账号设置       API Key、DashScope 识图 Key、模型选择
+                → 测试聊天（不经过微信直接测试 AI 回复）
+                → 微信扫码登录
+  回复设置       回复间隔、表情包概率、记忆模式
+                → 深度思考：AI 回复前先深度推理（仅 Claude 模型）
+                → 联网搜索：AI 可主动搜索互联网获取最新信息
+                → 用户专属 Prompt：为每个联系人单独设定角色人设
+                → 分析语言习惯并生成 Prompt：自动分析对方聊天风格，
+                  合并人设生成最终 System Prompt（每 2 小时自动刷新）
+                → 回复字数上限：限制每条回复的最大字符数
+                → 休息时间：设置每天不回复的时间段
+                → 定时重启：每天指定时间自动重启
+  表情包         上传/管理表情包，按情绪分类
+                AI 会根据对话情绪自动匹配发送
+  定时消息       设置定时群发消息，支持 Cron 表达式
+
+【五、用户对话命令】
+
+  用户可在微信对话中发送以下命令：
+
+    "自动回复"         开启自动回复
+    "关闭自动回复"      关闭自动回复
+    "清空对话"         清除与当前用户的对话历史
+    "语音"            切换到语音回复模式
+    "文字"            切换回文字回复模式
+    "状态"            查看机器人当前状态
+
+【六、表情包管理】
+
+  表情包文件存放在 data/stickers/ 目录下：
+
+    data/stickers/
+      happy/       开心类
+      sad/         伤心类
+      angry/       生气类
+      surprised/   惊讶类
+      love/        爱/喜欢类
+      neutral/     中性/默认
+
+  支持格式：PNG, JPG, GIF, WebP
+  可直接将图片放入对应文件夹，然后在管理面板点「扫描本地表情包」。
+
+  AI 自动根据对话情绪选择对应文件夹中的表情包发送。
+
+【七、图片识别功能】
+
+  1. 在管理面板配置 DashScope API Key
+  2. 用户在微信中发送图片给 Bot
+  3. Bot 调用 AI 视觉模型分析图片内容、推断情绪
+  4. 按照设定的人设风格，给出符合角色的自然回复
+  5. 自动匹配对应情绪的表情包发送
+
+【八、目录结构】
+
+  （exe 所在目录）
+    clawbot.exe            主程序
+    .env                   配置文件（首次运行自动生成）
+    data/                  数据目录（首次运行自动生成）
+      conversations.db     数据库（对话记录、配置、表情包、人设）
+      bot.log              运行日志
+      stickers/            表情包文件
+      wechat_account.json  微信登录会话
+      qrcode.png           缓存的登录二维码
+
+【九、数据备份与迁移】
+
+  备份：复制 data\ 文件夹和 .env 文件即可
+  迁移到新电脑：将 clawbot.exe + data\ + .env 复制到新电脑即可
+  重置：删除 data\ 文件夹，重新启动会自动创建干净的数据库
+
+【十、常见问题】
+
+  Q: 双击 exe 没反应？
+  A: 检查是否被杀毒软件拦截。添加信任后重试。
+
+  Q: 管理面板打不开？
+  A: 检查端口 8080 是否被占用。编辑 .env 中 ADMIN_PORT 换端口。
+
+  Q: 二维码无法显示？
+  A: 检查网络能否访问 https://ilinkai.weixin.qq.com。
+
+  Q: AI 回复风格不对？
+  A: 在管理面板「回复设置」中为该联系人设置专属人设，
+     然后点击「分析语言习惯并生成 Prompt」让 AI 学习对方风格。
+
+  Q: AI 不回复？
+  A: 检查 API Key 是否正确、账户是否有余额。
+
+  Q: 图片识别功能不生效？
+  A: 确认已配置 DashScope API Key 且 Key 有效。
+
+  Q: 如何查看日志？
+  A: 查看 data/bot.log 文件。
+
+  Q: 更新版本怎么操作？
+  A: 下载新版 clawbot.exe 覆盖旧文件即可。
+     data\ 和 .env 不会被覆盖，数据安全。
