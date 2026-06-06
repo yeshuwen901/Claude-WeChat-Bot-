@@ -1,48 +1,71 @@
-"""Anthropic API client wrapper."""
+"""Unified AI client — all models via litellm."""
 
 import json
 import logging
 import time
-import urllib.request
-import urllib.error
 from datetime import datetime, timezone, timedelta
 
 import random
+import litellm
 
-import anthropic
-from anthropic import APIError, APIStatusError, RateLimitError
-
-from config import config, get_base_url_for_model
 from config_service import config_service
 from database import db
+from model_registry import (
+    BUILTIN_MODELS, ModelConfig,
+    load_model_configs, dump_model_configs,
+    get_enabled_models, get_model_def, get_default_model, models_for_api,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class AIClient:
     def __init__(self):
-        self._last_key: str = ""
         self._last_model: str = ""
-        self.client: anthropic.Anthropic | None = None
-        self._ensure_client()
-
-    def _get_effective_key(self) -> str:
-        return config_service.get_api_key() or config.anthropic_api_key
 
     def _get_effective_model(self) -> str:
-        return config_service.get_anthropic_model() or config.anthropic_model
+        """Get the current model to use, respecting user's default choice."""
+        configs = self._get_model_configs()
+        return get_default_model(configs)
 
-    def _ensure_client(self):
-        key = self._get_effective_key()
-        model = self._get_effective_model()
-        if self.client is None or key != self._last_key or model != self._last_model:
-            kwargs = dict(api_key=key)
-            base_url = get_base_url_for_model(model)
-            if base_url:
-                kwargs["base_url"] = base_url
-            self.client = anthropic.Anthropic(**kwargs)
-            self._last_key = key
-            self._last_model = model
+    def _get_model_configs(self) -> dict[str, ModelConfig]:
+        return load_model_configs(config_service.get_model_configs_raw())
+
+    def _get_api_key_for_model(self, model_id: str) -> str:
+        """Get the API key for a model, with DeepSeek fallback."""
+        configs = self._get_model_configs()
+        mc = configs.get(model_id)
+        if mc and mc.api_key:
+            return mc.api_key
+        if model_id.startswith("deepseek/"):
+            return config_service.get_api_key()
+        return ""
+
+    def _completion(self, model: str, messages: list[dict],
+                    system: str = "", max_tokens: int = 4096,
+                    temperature: float = 0.7,
+                    tools: list[dict] | None = None,
+                    stream: bool = False):
+        """Unified litellm completion call."""
+        api_key = self._get_api_key_for_model(model)
+        if not api_key:
+            raise RuntimeError(f"No API key configured for model: {model}")
+
+        kwargs = dict(
+            model=model,
+            messages=messages,
+            api_key=api_key,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        if system:
+            kwargs["messages"] = [{"role": "system", "content": system}] + messages
+        if tools:
+            kwargs["tools"] = tools
+        if stream:
+            kwargs["stream"] = True
+
+        return litellm.completion(**kwargs)
 
     def _get_stories_block(self, conv_id: str) -> str:
         """Get matched personal stories for the current conversation context."""
@@ -82,6 +105,8 @@ class AIClient:
         5. Intent classification - AI self-classifies user intent
         6. Extra modifiers - mood, personal stories, length rules
         """
+        from config import config
+
         now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M CST")
         context = ""
         if is_room and room_topic:
@@ -92,7 +117,8 @@ class AIClient:
             context = f"This is a direct message with {contact_name}."
 
         # Query intimacy score
-        intimacy_score = 10  # default for new users
+        intimacy_score = 10
+        record = {}
         if conv_id:
             try:
                 record = db.get_intimacy(conv_id)
@@ -110,7 +136,7 @@ class AIClient:
                 "语气友好温暖。"
             )
 
-        # Get user persona (existing logic preserved)
+        # Get user persona
         persona_text = ""
         if conv_id:
             full = db.get_user_prompt_full(conv_id)
@@ -151,7 +177,6 @@ class AIClient:
                 "- Do not generate harmful, illegal, or unethical content."
             )
         else:
-            # Default persona (simplified: no user prompt set)
             parts.append(
                 f"You are {config.bot_name}, a helpful, friendly AI assistant "
                 f"connected via WeChat.\n"
@@ -182,7 +207,6 @@ class AIClient:
             "如果是分享或吐槽，回复后可自然追问一句。"
         )
 
-        # Build the main prompt
         result = "\n\n".join(parts)
 
         # Layer 6: Extra modifiers
@@ -193,7 +217,6 @@ class AIClient:
         if extra:
             result += extra
 
-        # Apply variable substitution
         result = result.replace("{bot_name}", config.bot_name) \
                        .replace("{contact_name}", contact_name) \
                        .replace("{time}", now) \
@@ -202,42 +225,35 @@ class AIClient:
         return result
 
     def classify_emotion(self, text: str) -> str:
-
         """Classify the emotional tone of a text. Returns happy/sad/angry/surprised/love/neutral."""
-        self._ensure_client()
+        model = self._get_effective_model()
         try:
-            response = self.client.messages.create(
-                model=self._get_effective_model(),
+            response = self._completion(
+                model=model,
+                messages=[{"role": "user", "content": text}],
+                system="Classify the emotional tone of the text. Reply with exactly one word from: happy, sad, angry, surprised, love, neutral. No other output.",
                 max_tokens=16,
                 temperature=0.0,
-                system="Classify the emotional tone of the text. Reply with exactly one word from: happy, sad, angry, surprised, love, neutral. No other output.",
-                messages=[{"role": "user", "content": text}],
             )
-            for block in response.content:
-                if block.type == "text":
-                    result = block.text.strip().lower().rstrip(".,!;:，。！；：")
-                    return result
-            return "neutral"
+            result = response.choices[0].message.content.strip().lower().rstrip(".,!;:，。！；：")
+            return result
         except Exception:
             logger.warning("classify_emotion failed", exc_info=True)
             return "neutral"
 
     def classify_user_sentiment(self, text: str) -> str:
         """Classify the user's attitude toward the bot. Returns praise/insult/neutral."""
-        self._ensure_client()
+        model = self._get_effective_model()
         try:
-            response = self.client.messages.create(
-                model=self._get_effective_model(),
+            response = self._completion(
+                model=model,
+                messages=[{"role": "user", "content": text}],
+                system="Classify the user's attitude toward the chatbot in this message. Reply with exactly one word: praise (compliment, gratitude, affection), insult (rudeness, anger, mockery), or neutral (ordinary conversation). No other output.",
                 max_tokens=16,
                 temperature=0.0,
-                system="Classify the user's attitude toward the chatbot in this message. Reply with exactly one word: praise (compliment, gratitude, affection), insult (rudeness, anger, mockery), or neutral (ordinary conversation). No other output.",
-                messages=[{"role": "user", "content": text}],
             )
-            for block in response.content:
-                if block.type == "text":
-                    result = block.text.strip().lower().rstrip(".,!;:，。！；：")
-                    return result
-            return "neutral"
+            result = response.choices[0].message.content.strip().lower().rstrip(".,!;:，。！；：")
+            return result
         except Exception:
             logger.warning("classify_user_sentiment failed", exc_info=True)
             return "neutral"
@@ -255,18 +271,14 @@ class AIClient:
 
     @staticmethod
     def _strip_code_block(text: str) -> str:
-        """Remove markdown code block fences from AI output.
-        Handles: ```text```, ```json\ntext\n```, etc.
-        """
+        """Remove markdown code block fences from AI output."""
         text = text.strip()
-        # Remove opening fence with optional language tag
         if text.startswith("```"):
             newline_pos = text.find("\n")
             if newline_pos != -1:
                 text = text[newline_pos + 1:]
             else:
                 text = text[3:]
-        # Remove closing fence
         if text.endswith("```"):
             text = text[:-3]
         return text.strip()
@@ -286,59 +298,7 @@ class AIClient:
             return ""
         return f"\n\n【重要：你的每条回复必须控制在{limit}字以内。像真人发消息一样简短自然。】"
 
-    def _chat_with_image_qwen(
-        self, image_base64: str, image_mime: str, user_prompt: str,
-        system_prompt: str, messages: list[dict]
-    ) -> str:
-        """Vision call via Qwen-VL DashScope API (supports images natively)."""
-        import os as _os
-
-        api_key = config_service.get_dashscope_api_key()
-        if not api_key:
-            raise RuntimeError("DASHSCOPE_API_KEY not configured")
-
-        # Build conversation context (last 3 turns)
-        api_messages = []
-        for m in messages[-6:]:
-            api_messages.append({"role": m["role"], "content": m["content"]})
-
-        # Add image message in OpenAI multimodal format
-        api_messages.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": user_prompt},
-                {"type": "image_url", "image_url": {
-                    "url": f"data:{image_mime};base64,{image_base64}"
-                }},
-            ],
-        })
-
-        body = json.dumps({
-            "model": "qwen3-vl-plus",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                *api_messages,
-            ],
-            "max_tokens": 1024,
-            "temperature": 0.7,
-        }, ensure_ascii=False).encode("utf-8")
-
-        req = urllib.request.Request(
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"]
-        except urllib.error.HTTPError as e:
-            body_text = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Qwen-VL API HTTP {e.code}: {body_text}")
+    # ── Vision / Image Chat ──────────────────────────────────────────────
 
     def chat_with_image(
         self,
@@ -350,14 +310,22 @@ class AIClient:
         room_topic: str = "",
         conv_id: str = "",
     ) -> str:
-        """Chat with vision via Qwen-VL DashScope API, using user's persona."""
+        """Chat with vision — uses litellm to route to the current model if it supports vision.
 
-        # Get the user's persona / merged prompt
+        If the current model doesn't support vision, falls back to a text-only response
+        explaining that the model can't see images.
+        """
+        model = self._get_effective_model()
+        model_def = get_model_def(model)
+
+        if not model_def or not model_def.supports_vision:
+            return "收到你的图片啦！不过当前使用的模型暂时不支持识图功能，可以切换到支持识图的模型（如 GPT-4o、Claude）来使用这个功能哦~"
+
+        # Build persona prompt
         persona_prompt = self.build_system_prompt(
             contact_name, is_room, room_topic, conv_id=conv_id
         )
 
-        # Vision task instructions appended after persona
         vision_task = (
             f"\n\nThe user just sent you an image. Your task:\n"
             f"1. Briefly describe what you see in the image (1-2 sentences).\n"
@@ -374,65 +342,71 @@ class AIClient:
 
         system_prompt = persona_prompt + vision_task
 
-        user_prompt = (
-            f"Please analyze the image the user just sent. "
-            f"Consider the conversation context above and infer what emotion or meaning "
-            f"the user is expressing by sending this image. "
-            f"Reply in the language and style defined by your character."
-        )
+        api_messages = []
+        for m in messages[-6:]:
+            api_messages.append({"role": m["role"], "content": m["content"]})
 
-        logger.info("Calling Qwen-VL vision API...")
-        return self._chat_with_image_qwen(
-            image_base64, image_mime, user_prompt, system_prompt, messages
-        )
+        # Build multimodal user message
+        image_url = f"data:{image_mime};base64,{image_base64}"
+        api_messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Please analyze this image the user just sent."},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        })
 
-    def _build_thinking_config(self) -> dict | None:
-        """Return thinking config if enabled AND model supports it (Claude only)."""
-        if not config_service.is_deep_thinking_enabled():
-            return None
-        model = self._get_effective_model()
-        if not model.startswith("claude"):
-            return None
-        return {"type": "enabled", "budget_tokens": 2048}
+        logger.info(f"Calling vision via litellm: {model}")
+        try:
+            response = self._completion(
+                model=model,
+                messages=api_messages,
+                system=system_prompt,
+                max_tokens=1024,
+                temperature=0.7,
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Vision API failed: {e}")
+            return "收到你的图片啦！不过我现在有点看不清，等我眼睛好了再看看~"
+
+    # ── Web Search Tools ─────────────────────────────────────────────────
 
     def _build_tools(self) -> list[dict] | None:
-        """Return tool definitions for AI-driven web search."""
+        """Return tool definitions for AI-driven web search (OpenAI format)."""
         if not config_service.is_web_search_enabled():
             return None
         return [{
-            "name": "web_search",
-            "description": (
-                "Search the web for current information. Use this when the user asks "
-                "about recent events, news, facts you are unsure about, or questions "
-                "that require up-to-date information (time, date, weather, stock prices, etc.). "
-                "Do NOT use for simple conversations, greetings, opinions, or personal matters."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query (keywords or question, in Chinese or English)"
-                    }
-                },
-                "required": ["query"]
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": (
+                    "Search the web for current information. Use this when the user asks "
+                    "about recent events, news, facts you are unsure about, or questions "
+                    "that require up-to-date information (time, date, weather, stock prices, etc.). "
+                    "Do NOT use for simple conversations, greetings, opinions, or personal matters."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query (keywords or question, in Chinese or English)"
+                        }
+                    },
+                    "required": ["query"]
+                }
             }
         }]
 
-    # Keywords that force a pre-injection web search (program-side trigger)
     _SEARCH_TRIGGER_PATTERNS: list[str] = [
-        # Time
         "几点", "什么时间", "现在几点", "今天几号", "今天星期几", "当前时间",
         "日期", "星期几", "今天日期", "几月几号",
-        # Weather
         "天气", "气温", "下雨", "下雪", "台风", "雾霾", "空气质量",
         "多少度", "会下雨吗", "带伞", "冷不冷", "热不热",
-        # News
         "新闻", "最新", "最近发生", "热点", "热搜", "今天有什么",
-        # Real-time
         "股价", "股票", "汇率", "油价", "金价", "比特币",
         "最新消息", "最新数据",
-        # Factual lookup (only trigger if message is substantial)
         "什么是", "是谁", "在哪里", "什么时候", "怎么去", "多少钱",
     ]
 
@@ -447,42 +421,16 @@ class AIClient:
             return False
         if not message or len(message.strip()) < 2:
             return False
-
         msg = message.strip()
-
-        # Check for strong trigger words (always trigger)
         for kw in self._STRONG_TRIGGERS:
             if kw in msg:
                 return True
-
-        # Check general patterns
         for pat in self._SEARCH_TRIGGER_PATTERNS:
             if pat in msg:
-                # Skip false positives for very short casual messages
                 if len(msg) <= 4:
                     continue
                 return True
-
         return False
-
-    def _chat_inner(
-        self, system_block: list, api_messages: list,
-        thinking: dict | None, tools: list | None,
-        max_tokens: int | None = None,
-    ) -> "anthropic.types.Message":
-        """Single API call, returns the response object."""
-        kwargs = dict(
-            model=self._get_effective_model(),
-            max_tokens=max_tokens if max_tokens is not None else config.anthropic_max_tokens,
-            temperature=config.anthropic_temperature,
-            system=system_block,
-            messages=api_messages,
-        )
-        if thinking:
-            kwargs["thinking"] = thinking
-        if tools:
-            kwargs["tools"] = tools
-        return self.client.messages.create(**kwargs)
 
     def chat(
         self,
@@ -493,7 +441,7 @@ class AIClient:
         conv_id: str = "",
         followup_hint: str = "",
     ) -> str:
-        self._ensure_client()
+        model = self._get_effective_model()
         system_prompt = self.build_system_prompt(
             contact_name, is_room, room_topic, conv_id=conv_id,
             followup_hint=followup_hint
@@ -522,86 +470,78 @@ class AIClient:
                 except Exception as e:
                     logger.warning(f"Web search failed, continuing without: {e}")
 
-        # Build system with cache_control
-        system_block = [
-            {"type": "text", "text": system_prompt,
-             "cache_control": {"type": "ephemeral"}}
-        ]
+        # Build API messages (plain dicts, no Anthropic cache_control)
+        api_messages = [{"role": m["role"], "content": m["content"]} for m in messages]
 
-        # Mark first 2 messages with cache_control
-        api_messages = []
-        for i, msg in enumerate(messages):
-            if i < 2:
-                api_messages.append({
-                    "role": msg["role"],
-                    "content": [{"type": "text", "text": msg["content"],
-                                 "cache_control": {"type": "ephemeral"}}],
-                })
-            else:
-                api_messages.append(msg)
-
-        thinking = self._build_thinking_config()
         # Path 1 (keyword) and Path 2 (AI tool) are mutually exclusive
         tools = None if keyword_triggered else self._build_tools()
 
-        # Length is controlled solely by the system prompt (_get_length_rule),
-        # not by max_tokens. A tight max_tokens can garble Chinese text when
-        # the API hard-cuts at a token boundary mid-character.
         last_exception = None
         for attempt in range(3):
             try:
-                response = self._chat_inner(
-                    system_block, api_messages, thinking, tools,
+                response = self._completion(
+                    model=model,
+                    messages=api_messages,
+                    system=system_prompt,
+                    temperature=0.7,
+                    tools=tools,
                 )
 
                 # Path 2: handle AI-initiated tool_use
-                tool_use_blocks = [
-                    b for b in response.content if b.type == "tool_use"
-                ]
-                if tool_use_blocks:
+                msg = response.choices[0].message
+                if msg.tool_calls:
+                    # Add assistant message with tool calls to conversation
                     api_messages.append({
                         "role": "assistant",
-                        "content": [
-                            {"type": "text", "text": b.text}
-                            if b.type == "text" else b.model_dump()
-                            for b in response.content
-                        ],
+                        "content": msg.content or "",
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                }
+                            }
+                            for tc in msg.tool_calls
+                        ]
                     })
-                    tool_results = []
-                    for block in tool_use_blocks:
-                        if block.name == "web_search":
-                            from web_search import web_search_formatted
-                            query = block.input.get("query", "")
+                    # Execute tool calls
+                    for tc in msg.tool_calls:
+                        if tc.function.name == "web_search":
+                            args = json.loads(tc.function.arguments)
+                            query = args.get("query", "")
                             logger.info(f"AI-triggered web search: {query}")
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": web_search_formatted(query),
+                            from web_search import web_search_formatted
+                            result = web_search_formatted(query)
+                            api_messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": result,
                             })
-                    api_messages.append({
-                        "role": "user",
-                        "content": tool_results,
-                    })
-                    response = self._chat_inner(
-                        system_block, api_messages, None, None,
+                    # Second call with tool results
+                    response = self._completion(
+                        model=model,
+                        messages=api_messages,
+                        system=system_prompt,
+                        temperature=0.7,
+                        tools=None,
                     )
+                    return response.choices[0].message.content or ""
 
-                for block in response.content:
-                    if block.type == "text":
-                        return block.text
-                return "(no text in response)"
+                return msg.content or "(no text in response)"
 
-            except RateLimitError as e:
+            except litellm.exceptions.RateLimitError as e:
                 last_exception = e
                 if attempt < 2:
                     time.sleep(2 ** attempt)
-            except APIStatusError as e:
+            except litellm.exceptions.APIError as e:
                 last_exception = e
-                if e.status_code >= 500 and attempt < 2:
+                if getattr(e, 'status_code', 0) >= 500 and attempt < 2:
                     time.sleep(2 ** attempt)
                 else:
                     raise
-            except APIError as e:
+            except Exception as e:
                 last_exception = e
                 if attempt < 2:
                     time.sleep(2 ** attempt)
@@ -612,14 +552,11 @@ class AIClient:
 
     def analyze_language_habits(self, conv_id: str) -> dict:
         """Analyze a contact's language habits from recent chat history."""
-        self._ensure_client()
+        model = self._get_effective_model()
         raw_msgs = db.load_messages(conv_id)
-
-        # Extract user messages (role=user), last 50
         user_msgs = [m for m in raw_msgs if m.get("role") == "user"]
         if len(user_msgs) > 50:
             user_msgs = user_msgs[-50:]
-
         if not user_msgs:
             return {}
 
@@ -640,17 +577,14 @@ class AIClient:
         )
 
         try:
-            response = self.client.messages.create(
-                model=self._get_effective_model(),
+            response = self._completion(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                system="You are a linguistic analyst. Output only valid JSON, no explanation.",
                 max_tokens=512,
                 temperature=0.3,
-                system="You are a linguistic analyst. Output only valid JSON, no explanation.",
-                messages=[{"role": "user", "content": prompt}],
             )
-            text = ""
-            for block in response.content:
-                if block.type == "text":
-                    text += block.text
+            text = response.choices[0].message.content
             habits = self._extract_json(text)
             db.set_language_habits(conv_id, habits)
             return habits
@@ -660,7 +594,7 @@ class AIClient:
 
     def generate_merged_prompt(self, conv_id: str, persona: str, habits: dict) -> str:
         """Merge persona and language habits into a single layered prompt."""
-        self._ensure_client()
+        model = self._get_effective_model()
 
         habits_str = json.dumps(habits, ensure_ascii=False, indent=2)
         prompt = (
@@ -681,17 +615,14 @@ class AIClient:
         )
 
         try:
-            response = self.client.messages.create(
-                model=self._get_effective_model(),
+            response = self._completion(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                system="You are a prompt optimization expert. Output only the merged prompt, no other text.",
                 max_tokens=1024,
                 temperature=0.4,
-                system="You are a prompt optimization expert. Output only the merged prompt, no other text.",
-                messages=[{"role": "user", "content": prompt}],
             )
-            text = ""
-            for block in response.content:
-                if block.type == "text":
-                    text += block.text
+            text = response.choices[0].message.content
             merged = self._strip_code_block(text)
             db.set_merged_prompt(conv_id, merged)
             return merged
@@ -713,24 +644,20 @@ class AIClient:
         merged = self.generate_merged_prompt(conv_id, persona, habits)
         return merged or None
 
-
     # ── topic summary extraction ─────────────────────────────────────
 
     def extract_topic_summary(self, user_msg: str, bot_reply: str) -> str:
         """Extract a 1-2 sentence topic summary from a chat exchange."""
-        self._ensure_client()
+        model = self._get_effective_model()
         try:
-            response = self.client.messages.create(
-                model=self._get_effective_model(),
+            response = self._completion(
+                model=model,
+                messages=[{"role": "user", "content": f"User: {user_msg[:300]}\nBot: {bot_reply[:300]}"}],
+                system="Summarize the conversation topic in 1-2 brief Chinese sentences. Be specific about what was discussed. Output only the summary, no other text.",
                 max_tokens=128,
                 temperature=0.3,
-                system="Summarize the conversation topic in 1-2 brief Chinese sentences. Be specific about what was discussed. Output only the summary, no other text.",
-                messages=[{"role": "user", "content": f"User: {user_msg[:300]}\nBot: {bot_reply[:300]}"}],
             )
-            for block in response.content:
-                if block.type == "text":
-                    return block.text.strip()
-            return ""
+            return response.choices[0].message.content.strip()
         except Exception as e:
             logger.warning(f"Topic summary extraction failed: {e}")
             return ""
@@ -741,7 +668,8 @@ class AIClient:
         self, conv_id: str, topic: str, search_result: str
     ) -> str:
         """Generate a casual 'hey check this out' sharing message."""
-        self._ensure_client()
+        from config import config
+        model = self._get_effective_model()
 
         now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M CST")
         contact_name = conv_id
@@ -754,24 +682,19 @@ class AIClient:
             system_prompt = merged.replace("{bot_name}", config.bot_name) \
                                   .replace("{contact_name}", contact_name) \
                                   .replace("{time}", now)
-            mood = self._get_mood_tone()
-            stories = self._get_stories_block(conv_id)
-            if mood:
-                system_prompt += mood
-            if stories:
-                system_prompt += stories
         elif persona:
             system_prompt = persona.replace("{bot_name}", config.bot_name) \
                                    .replace("{contact_name}", contact_name) \
                                    .replace("{time}", now)
-            mood = self._get_mood_tone()
-            stories = self._get_stories_block(conv_id)
-            if mood:
-                system_prompt += mood
-            if stories:
-                system_prompt += stories
         else:
             system_prompt = self.build_system_prompt(contact_name, False, "", conv_id)
+
+        mood = self._get_mood_tone()
+        stories = self._get_stories_block(conv_id)
+        if mood:
+            system_prompt += mood
+        if stories:
+            system_prompt += stories
 
         user_message = (
             f"你刚刚在网上看到了一个关于「{topic}」的有趣内容：\n\n"
@@ -785,17 +708,14 @@ class AIClient:
         )
 
         try:
-            response = self.client.messages.create(
-                model=self._get_effective_model(),
+            response = self._completion(
+                model=model,
+                messages=[{"role": "user", "content": user_message}],
+                system=system_prompt,
                 max_tokens=384,
                 temperature=0.85,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
             )
-            for block in response.content:
-                if block.type == "text":
-                    return block.text
-            return ""
+            return response.choices[0].message.content
         except Exception as e:
             logger.error(f"Sharing message generation failed: {e}")
             return ""
@@ -806,27 +726,15 @@ class AIClient:
         self, conv_id: str, topic: str = "", trigger_text: str = "",
         recent_context: list[dict] | None = None,
     ) -> str:
-        """Generate a proactive message for active/scheduled chat.
-
-        Args:
-            conv_id: The conversation ID (contact or group).
-            topic: Topic keyword from scheduled chat (e.g. '早安').
-                   Used for scheduled chat only.
-            trigger_text: A user-defined trigger text from active chat settings.
-                          Used for interval-based active chat only.
-            recent_context: Recent messages for context-aware continuation.
-                            The AI will decide whether to continue the previous
-                            topic or start a new one based on this context.
-        """
-        self._ensure_client()
+        """Generate a proactive message for active/scheduled chat."""
         from config import config as bot_config
         from datetime import datetime, timezone, timedelta
+
+        model = self._get_effective_model()
 
         now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M CST")
         contact_name = conv_id
 
-        # Load persona / merged prompt for this contact
-        from database import db
         full = db.get_user_prompt_full(conv_id)
         merged = (full.get("merged_prompt") or "").strip() if full else ""
         persona = (full.get("prompt") or "").strip() if full else ""
@@ -835,26 +743,20 @@ class AIClient:
             system_prompt = merged.replace("{bot_name}", bot_config.bot_name) \
                                   .replace("{contact_name}", contact_name) \
                                   .replace("{time}", now)
-            mood = self._get_mood_tone()
-            stories = self._get_stories_block(conv_id)
-            if mood:
-                system_prompt += mood
-            if stories:
-                system_prompt += stories
         elif persona:
             system_prompt = persona.replace("{bot_name}", bot_config.bot_name) \
                                    .replace("{contact_name}", contact_name) \
                                    .replace("{time}", now)
-            mood = self._get_mood_tone()
-            stories = self._get_stories_block(conv_id)
-            if mood:
-                system_prompt += mood
-            if stories:
-                system_prompt += stories
         else:
             system_prompt = self.build_system_prompt(contact_name, False, "", conv_id)
 
-        # Build the active-chat instruction
+        mood = self._get_mood_tone()
+        stories = self._get_stories_block(conv_id)
+        if mood:
+            system_prompt += mood
+        if stories:
+            system_prompt += stories
+
         if topic:
             guidance = (
                 f"用户预设的话题方向是：「{topic}」。\n"
@@ -870,17 +772,14 @@ class AIClient:
         else:
             guidance = "请根据你的人设和当前时间，自然地开启一个新话题。"
 
-        # Build context-aware continuation instruction
         context_block = ""
         if recent_context:
-            # Build a readable conversation log
             lines = []
             for m in recent_context:
                 role = contact_name if m["role"] == "user" else "你"
                 content = m.get("content", "")[:200]
                 lines.append(f"- {role}：{content}")
             history = "\n".join(lines)
-
             context_block = (
                 f"\n\n## 最近的对话记录（供你判断话题是否应该延续）\n\n"
                 f"{history}\n\n"
@@ -893,7 +792,6 @@ class AIClient:
                 f"- 无论续聊还是新话题，都不要生硬地提「上次我们聊到……」这类元描述，直接自然切入\n"
             )
 
-        # Check for stored topic summary (persists even when messages are trimmed)
         topic_block = ""
         state = db.get_active_chat_state(conv_id)
         if state.get("last_topic_summary") and state.get("last_topic_at", 0):
@@ -922,17 +820,14 @@ class AIClient:
         )
 
         try:
-            response = self.client.messages.create(
-                model=self._get_effective_model(),
+            response = self._completion(
+                model=model,
+                messages=[{"role": "user", "content": user_message}],
+                system=system_prompt,
                 max_tokens=512,
                 temperature=0.9,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
             )
-            for block in response.content:
-                if block.type == "text":
-                    return block.text
-            return ""
+            return response.choices[0].message.content
         except Exception as e:
             logger.error(f"Active message generation failed: {e}")
             return ""

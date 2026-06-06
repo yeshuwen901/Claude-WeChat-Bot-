@@ -610,6 +610,12 @@ class WeChatBot:
         if not auto_reply.enabled:
             return
 
+        # Vision toggle check
+        if not config_service.is_vision_enabled():
+            reply_to = group_id if is_room else from_user_id
+            self._send_reply(reply_to, "收到你的图片啦～不过识图功能当前已关闭，可以在管理页面开启哦", context_token)
+            return
+
         # Allowlist
         if not is_room:
             if not allowlist.is_user_allowed(from_user_id, from_user_id):

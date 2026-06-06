@@ -1,5 +1,5 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0.."
 setlocal enabledelayedexpansion
 
 title WeChatBot - Update from GitHub
@@ -9,7 +9,7 @@ echo ================================================
 echo.
 
 :: ── CONFIGURE THIS ──────────────────────────────────────────────────
-set "GITHUB_REPO=https://github.com/YOUR_USERNAME/YOUR_REPO.git"
+set "GITHUB_REPO=https://github.com/yeshuwen901/Claude-WeChat-Bot-.git"
 set "GITHUB_BRANCH=main"
 :: ────────────────────────────────────────────────────────────────────
 
@@ -26,8 +26,8 @@ if !ERRORLEVEL! neq 0 (
 
 :: ── Read current version ────────────────────────────────────────────
 set "OLD_VER=unknown"
-if exist "%~dp0VERSION" (
-    set /p OLD_VER=<"%~dp0VERSION"
+if exist "VERSION" (
+    set /p OLD_VER=<"VERSION"
 )
 echo   Current version: !OLD_VER!
 echo.
@@ -90,37 +90,37 @@ echo   [1/5] Backing up your data...
 
 set "TIMESTAMP=%date:~0,4%%date:~5,2%%date:~8,2%_%time:~0,2%%time:~3,2%%time:~6,2%"
 set "TIMESTAMP=!TIMESTAMP: =0!"
-set "BACKUP_DIR=%~dp0backup_!OLD_VER!_!TIMESTAMP!"
+set "BACKUP_DIR=backup_!OLD_VER!_!TIMESTAMP!"
 mkdir "!BACKUP_DIR!\data" 2>nul
 
-if exist "%~dp0data\conversations.db" (
-    copy /y "%~dp0data\conversations.db" "!BACKUP_DIR!\data\" >nul
+if exist "data\conversations.db" (
+    copy /y "data\conversations.db" "!BACKUP_DIR!\data\" >nul
     echo     Saved: data\conversations.db
 )
-if exist "%~dp0data\.keyfile" (
-    copy /y "%~dp0data\.keyfile" "!BACKUP_DIR!\data\" >nul
+if exist "data\.keyfile" (
+    copy /y "data\.keyfile" "!BACKUP_DIR!\data\" >nul
     echo     Saved: data\.keyfile
 )
-if exist "%~dp0data\wechat_account.json" (
-    copy /y "%~dp0data\wechat_account.json" "!BACKUP_DIR!\data\" >nul
+if exist "data\wechat_account.json" (
+    copy /y "data\wechat_account.json" "!BACKUP_DIR!\data\" >nul
     echo     Saved: data\wechat_account.json
 )
-if exist "%~dp0.env" (
-    copy /y "%~dp0.env" "!BACKUP_DIR!\" >nul
+if exist ".env" (
+    copy /y ".env" "!BACKUP_DIR!\" >nul
     echo     Saved: .env
 )
-if exist "%~dp0data\*.json" (
-    for %%f in ("%~dp0data\*.json") do (
+if exist "data\*.json" (
+    for %%f in ("data\*.json") do (
         copy /y "%%f" "!BACKUP_DIR!\data\" >nul 2>&1
     )
 )
-if exist "%~dp0data\*.md" (
-    for %%f in ("%~dp0data\*.md") do (
+if exist "data\*.md" (
+    for %%f in ("data\*.md") do (
         copy /y "%%f" "!BACKUP_DIR!\data\" >nul 2>&1
     )
 )
-if exist "%~dp0data\stickers" (
-    xcopy /e /i /q /y "%~dp0data\stickers" "!BACKUP_DIR!\data\stickers" >nul 2>&1
+if exist "data\stickers" (
+    xcopy /e /i /q /y "data\stickers" "!BACKUP_DIR!\data\stickers" >nul 2>&1
 )
 echo     Backup saved to: !BACKUP_DIR!
 echo.
@@ -137,7 +137,7 @@ echo.
 echo   [3/5] Installing new version...
 
 :: Sync src/ directory (only new/changed files, skip data files)
-robocopy "%TEMP_CLONE%\src" "%~dp0src" /e /njh /njs /np /ndl /xd __pycache__ >nul 2>&1
+robocopy "%TEMP_CLONE%\src" "src" /e /njh /njs /np /ndl /xd __pycache__ >nul 2>&1
 
 :: Copy root files (but NEVER .env from repo — user's .env is sacred)
 for %%f in (
@@ -148,14 +148,14 @@ for %%f in (
     "VERSION"
 ) do (
     if exist "%TEMP_CLONE%\%%~f" (
-        copy /y "%TEMP_CLONE%\%%~f" "%~dp0\" >nul
+        copy /y "%TEMP_CLONE%\%%~f" "." >nul
     )
 )
 
 :: Copy data/ documentation files (but NOT database, keyfile, accounts, prompts)
 for %%f in ("ISSUES.md" "REQUIREMENTS_REMINDER.md" "REQUIREMENTS_WEB_SEARCH.md" "REQUIREMENTS_CHAT_PROTECTION.md") do (
     if exist "%TEMP_CLONE%\data\%%~f" (
-        copy /y "%TEMP_CLONE%\data\%%~f" "%~dp0data\" >nul
+        copy /y "%TEMP_CLONE%\data\%%~f" "data\" >nul
     )
 )
 echo.
@@ -169,7 +169,7 @@ echo.
 echo   [5/5] Checking Python dependencies...
 
 set "PYCMD="
-if exist "%~dp0.venv\Scripts\python.exe" (
+if exist ".venv\Scripts\python.exe" (
     set "PYCMD=%~dp0.venv\Scripts\python.exe"
 ) else (
     python --version >nul 2>&1
@@ -179,7 +179,7 @@ if "!PYCMD!"=="" (
     echo   WARNING: Python not found. Run setup.bat to install dependencies.
 ) else (
     echo   Updating dependencies via pip...
-    "!PYCMD!" -m pip install -r "%~dp0requirements.txt" --quiet 2>&1
+    "!PYCMD!" -m pip install -r "requirements.txt" --quiet 2>&1
     echo   Dependencies updated.
 )
 echo.

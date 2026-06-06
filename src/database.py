@@ -169,12 +169,14 @@ class Database:
             self.conn.commit()
 
         # Seed default config values.
-        # api_key / dashscope_api_key are NOT seeded from env — config_service
+        # api_key is NOT seeded from env — config_service
         # falls back to env at read time, and values written via the admin
         # panel are encrypted before storage.
         defaults = {
             "api_key": "",
-            "dashscope_api_key": "",
+            "model_configs": "",
+            "default_model": "",
+            "vision_enabled": "1",
             "reply_interval": "0",
             "sticker_probability": "0.3",
             "memory_mode": "1",

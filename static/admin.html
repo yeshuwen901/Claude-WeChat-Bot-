@@ -257,6 +257,7 @@
     .main { padding: 0; }
     .card { padding: 16px 18px; }
   }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
@@ -290,50 +291,18 @@
         <span>配置 API Key 后，点击下方「生成二维码」用微信扫码即可连接</span>
       </div>
 
-      <!-- API Key -->
+      <!-- 模型管理 -->
       <div class="card">
-        <h3><span class="step-badge">1</span> API Key</h3>
-        <div class="field">
-          <label>DeepSeek API Key</label>
-          <div style="display:flex;gap:8px">
-            <input type="password" id="apiKey" placeholder="sk-xxxxxxxx" style="flex:1" autocomplete="off">
-            <button class="btn btn-ghost btn-sm" onclick="toggleApiKeyVisibility()" id="apiKeyToggle" style="white-space:nowrap">显示</button>
-          </div>
-          <span class="hint">从 <a href="https://api.deepseek.com" target="_blank">api.deepseek.com</a> 获取</span>
+        <h3><span class="step-badge">1</span> AI 模型管理</h3>
+        <p class="hint" style="margin-bottom:12px">填入 API Key 即启用对应模型，留空则跳过</p>
+        <div id="modelList"></div>
+        <div style="margin-top:16px;display:flex;align-items:center;gap:12px">
+          <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="visionToggle" checked onchange="saveVisionToggle()">
+            <span>启用识图功能</span>
+          </label>
+          <span class="hint">（仅支持识图的模型生效）</span>
         </div>
-        <button class="btn btn-pri" onclick="saveApiKey()">保存 API Key</button>
-        <span id="apiKeyStatus" style="margin-left:10px;font-size:13px"></span>
-      </div>
-
-      <!-- DashScope API Key（图片识别） -->
-      <div class="card">
-        <h3><span class="step-badge">2</span> 图片识别 API (DashScope)</h3>
-        <div class="field">
-          <label>DashScope API Key（用于 Qwen-VL 识图，理解用户发送的图片内容）</label>
-          <div style="display:flex;gap:8px">
-            <input type="password" id="dashscopeKey" placeholder="sk-xxxxxxxx" style="flex:1" autocomplete="off">
-            <button class="btn btn-ghost btn-sm" onclick="toggleDashscopeKeyVisibility()" id="dashscopeKeyToggle" style="white-space:nowrap">显示</button>
-          </div>
-          <span class="hint">从 <a href="https://dashscope.console.aliyun.com/apiKey" target="_blank">阿里云 DashScope</a> 获取</span>
-        </div>
-        <button class="btn btn-pri" onclick="saveDashscopeKey()">保存 DashScope Key</button>
-        <span id="dashscopeKeyStatus" style="margin-left:10px;font-size:13px"></span>
-      </div>
-
-      <!-- 模型选择 -->
-      <div class="card">
-        <h3><span class="step-badge">3</span> AI 模型</h3>
-        <div class="field">
-          <label>选择 AI 模型</label>
-          <select id="modelSelect">
-            <option value="deepseek-v4-pro">deepseek-v4-pro（推荐）</option>
-            <option value="deepseek-v4-pro-chat">deepseek-v4-pro-chat</option>
-            <option value="claude-sonnet-4-20250514">claude-sonnet-4-20250514</option>
-            <option value="claude-opus-4-20250514">claude-opus-4-20250514</option>
-          </select>
-        </div>
-        <button class="btn btn-pri" onclick="saveModel()">保存模型</button>
-        <span id="modelStatus" style="margin-left:10px;font-size:13px"></span>
       </div>
 
       <!-- AI 对话测试 -->
@@ -721,54 +690,109 @@ document.querySelectorAll('.sidebar nav a').forEach(a => {
   });
 });
 
-// ── API Key ─────────────────────────────────────────────────────
-function toggleApiKeyVisibility() {
-  const el = document.getElementById('apiKey');
-  const btn = document.getElementById('apiKeyToggle');
-  if (el.type === 'password') { el.type = 'text'; btn.textContent = '隐藏'; }
-  else { el.type = 'password'; btn.textContent = '显示'; }
-}
+// ── 模型管理 ─────────────────────────────────────────────────────
+let _modelData = [];
 
-async function saveApiKey() {
-  const key = document.getElementById('apiKey').value.trim();
-  if (!key) { toast('请输入 API Key', 'err'); return; }
+async function loadModels() {
   try {
-    await api('PUT', '/api/config/apikey', { api_key: key });
-    document.getElementById('apiKey').type = 'password';
-    document.getElementById('apiKeyToggle').textContent = '显示';
-    document.getElementById('apiKeyStatus').innerHTML = '<span style="color:var(--success)">✓ 已保存</span>';
-    toast('API Key 已保存', 'ok');
-  } catch(e) { toast('保存失败: ' + e.message, 'err'); }
+    _modelData = await api('GET', '/api/models');
+    renderModelTable();
+  } catch(e) { console.error('loadModels', e); }
 }
 
-// ── DashScope Key ───────────────────────────────────────────────
-function toggleDashscopeKeyVisibility() {
-  const el = document.getElementById('dashscopeKey');
-  const btn = document.getElementById('dashscopeKeyToggle');
-  if (el.type === 'password') { el.type = 'text'; btn.textContent = '隐藏'; }
-  else { el.type = 'password'; btn.textContent = '显示'; }
-}
+function renderModelTable() {
+  const groups = {};
+  _modelData.forEach(m => {
+    const p = m.provider || '其他';
+    if (!groups[p]) groups[p] = [];
+    groups[p].push(m);
+  });
 
-async function saveDashscopeKey() {
-  const key = document.getElementById('dashscopeKey').value.trim();
-  if (!key) { toast('请输入 DashScope API Key', 'err'); return; }
-  try {
-    await api('PUT', '/api/config/dashscope-apikey', { api_key: key });
-    document.getElementById('dashscopeKey').type = 'password';
-    document.getElementById('dashscopeKeyToggle').textContent = '显示';
-    document.getElementById('dashscopeKeyStatus').innerHTML = '<span style="color:var(--success)">✓ 已保存</span>';
-    toast('DashScope Key 已保存', 'ok');
-  } catch(e) { toast('保存失败: ' + e.message, 'err'); }
-}
+  let html = '';
+  for (const [provider, models] of Object.entries(groups)) {
+    const gid = 'group_' + Math.random().toString(36).slice(2, 8);
+    const enabledCount = models.filter(m => m.enabled && m.api_key && m.api_key !== '****').length;
+    html += `<div style="margin-bottom:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden">`;
+    // Header — clickable
+    html += `<div onclick="document.getElementById('${gid}').classList.toggle('hidden');this.querySelector('.arrow').classList.toggle('rotated')"
+      style="padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:10px;user-select:none">
+      <span class="arrow" style="font-size:10px;transition:transform 0.2s">▶</span>
+      <span style="flex:1;font-weight:600;font-size:14px">${esc(provider)}</span>
+      <span style="font-size:12px;color:var(--muted)">${models.length}个模型 · ${enabledCount}个已启用</span>
+    </div>`;
 
-// ── 模型 ─────────────────────────────────────────────────────────
-async function saveModel() {
-  try {
-    await api('PUT', '/api/config', {
-      anthropic_model: document.getElementById('modelSelect').value,
+    // Body — model cards
+    html += `<div id="${gid}" class="hidden" style="padding:4px 16px 14px">`;
+    models.forEach(m => {
+      const idx = _modelData.indexOf(m);
+      const hasKey = m.api_key && m.api_key !== '****';
+      const visionTag = m.supports_vision ? '✔' : '✗';
+      const visC = m.supports_vision ? 'var(--success)' : 'var(--muted)';
+      const isDefault = m.is_default;
+      html += `<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;margin-bottom:6px;background:${isDefault?'#f0f7ff':''};border-radius:8px;border:1px solid ${isDefault?'var(--accent)':'var(--border)'}">`;
+      // Radio
+      html += `<input type="radio" name="defaultModel" ${isDefault?'checked':''} onchange="setDefaultModel('${esc(m.id)}')" title="设为默认" style="flex-shrink:0">`;
+      // Info
+      html += `<div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-weight:600;font-size:14px">${esc(m.name)}</span>
+          <span style="color:${visC};font-weight:700;font-size:12px" title="${m.supports_vision?'支持识图':'不支持识图'}">${visionTag} 识图</span>
+          ${isDefault ? '<span style="font-size:11px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:3px">默认</span>' : ''}
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(m.id)}</div>
+      </div>`;
+      // Key input
+      html += `<div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+        <input type="password" id="key_${idx}" value="${esc(m.api_key||'')}" placeholder="API Key" style="width:220px;font-size:12px" autocomplete="off">
+        <button class="btn btn-ghost btn-sm" onclick="toggleKeyVis(${idx})" style="font-size:11px;white-space:nowrap">显示</button>
+        <button class="btn btn-pri btn-sm" onclick="saveModelKey(${idx})" style="font-size:11px;white-space:nowrap">保存</button>
+      </div>`;
+      html += `</div>`;
     });
-    document.getElementById('modelStatus').innerHTML = '<span style="color:var(--success)">✓ 已保存</span>';
-    toast('模型已保存', 'ok');
+    html += `</div></div>`;
+  }
+  // Add CSS for rotated arrow
+  html += `<style>.arrow.rotated { transform: rotate(90deg); }</style>`;
+  document.getElementById('modelList').innerHTML = html;
+}
+
+function toggleKeyVis(i) {
+  const el = document.getElementById('key_' + i);
+  const btn = el.nextElementSibling;
+  if (el.type === 'password') { el.type = 'text'; btn.textContent = '隐藏'; }
+  else { el.type = 'password'; btn.textContent = '显示'; }
+}
+
+async function saveModelKey(i) {
+  const m = _modelData[i];
+  const key = document.getElementById('key_' + i).value.trim();
+  try {
+    await api('PUT', '/api/models/' + encodeURIComponent(m.id), { api_key: key, enabled: key !== '' });
+    document.getElementById('key_' + i).type = 'password';
+    toast(esc(m.name) + ' 已保存', 'ok');
+    await loadModels();
+  } catch(e) { toast('保存失败: ' + e.message, 'err'); }
+}
+
+async function setDefaultModel(modelId) {
+  try {
+    await api('PUT', '/api/models/default', { model_id: modelId });
+    toast('默认模型已更新', 'ok');
+    await loadModels();
+  } catch(e) { toast('设置失败: ' + e.message, 'err'); }
+}
+
+async function loadVisionConfig() {
+  try {
+    const r = await api('GET', '/api/config/vision');
+    document.getElementById('visionToggle').checked = r.enabled;
+  } catch(e) { console.error('loadVisionConfig', e); }
+}
+
+async function saveVisionToggle() {
+  const enabled = document.getElementById('visionToggle').checked;
+  try {
+    await api('PUT', '/api/config/vision', { enabled });
   } catch(e) { toast('保存失败: ' + e.message, 'err'); }
 }
 
@@ -913,10 +937,7 @@ async function loadConfig() {
   const cfg = await api('GET', '/api/config');
   // Show status indicators instead of writing masked values to inputs
   if (cfg.api_key) {
-    document.getElementById('apiKeyStatus').innerHTML = '<span style="color:var(--success)">✓ 已配置</span>';
-  }
-  if (cfg.dashscope_api_key) {
-    document.getElementById('dashscopeKeyStatus').innerHTML = '<span style="color:var(--success)">✓ 已配置</span>';
+    // DeepSeek key is now managed through the model table
   }
   document.getElementById('replyInterval').value = cfg.reply_interval || '0';
   document.getElementById('memoryMode').checked = cfg.memory_mode === '1';
@@ -927,9 +948,6 @@ async function loadConfig() {
   const prob = Math.round(parseFloat(cfg.sticker_probability || '0.3') * 100);
   document.getElementById('stickerProbability').value = prob;
   document.getElementById('stickerProbLabel').textContent = prob;
-  if (cfg.anthropic_model) {
-    document.getElementById('modelSelect').value = cfg.anthropic_model;
-  }
   document.getElementById('activeChatEnabled').checked = cfg.active_chat_enabled === '1';
   document.getElementById('activeChatCooldown').value = cfg.active_chat_cooldown_minutes || '60';
   document.getElementById('activeChatMaxSilent').value = cfg.active_chat_max_silent || '3';
@@ -1464,7 +1482,7 @@ async function resetIntimacy(convId) {
 }
 
 // ── 初始化 ──────────────────────────────────────────────────────
-loadConfig(); loadStatus(); loadContacts(); loadUserPromptList(); loadACSContacts();
+loadConfig(); loadModels(); loadVisionConfig(); loadStatus(); loadContacts(); loadUserPromptList(); loadACSContacts();
 setInterval(loadStatus, 10000);
 setInterval(loadContacts, 60000);
 

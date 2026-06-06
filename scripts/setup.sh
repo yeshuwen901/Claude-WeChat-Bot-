@@ -4,7 +4,7 @@
 # ================================================
 
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 echo ""
 echo "================================================"
@@ -56,7 +56,7 @@ fi
 
 # Create data directories and sample stickers
 mkdir -p data
-python3 generate_stickers.py 2>/dev/null || {
+python3 src/generate_stickers.py 2>/dev/null || {
     echo "  (Sticker generation skipped - Pillow may not be installed)"
     for em in happy sad angry love surprised neutral; do
         mkdir -p "data/stickers/$em"

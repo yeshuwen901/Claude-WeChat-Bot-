@@ -1,5 +1,5 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0.."
 setlocal enabledelayedexpansion
 
 title WeChatBot Updater
@@ -10,8 +10,8 @@ echo.
 
 :: ── Read new version ───────────────────────────────────────────────
 set "NEW_VER=unknown"
-if exist "%~dp0VERSION" (
-    set /p NEW_VER=<"%~dp0VERSION"
+if exist "VERSION" (
+    set /p NEW_VER=<"VERSION"
     echo   New version: !NEW_VER!
 ) else (
     echo   WARNING: VERSION file not found in this package.
@@ -127,7 +127,7 @@ echo.
 :: ── Step 3: Copy new code files ────────────────────────────────────
 echo   [3/4] Installing new version...
 :: Copy source
-robocopy "%~dp0src" "!OLD_PATH!\src" /e /njh /njs /np /ndl >nul 2>&1
+robocopy "src" "!OLD_PATH!\src" /e /njh /njs /np /ndl >nul 2>&1
 :: Copy root files
 for %%f in (
     "start.bat" "start.sh" "setup.bat" "setup.sh" "update.bat"
@@ -135,14 +135,14 @@ for %%f in (
     "README.md" "REQUIREMENTS.md" "使用说明书.txt"
     "VERSION"
 ) do (
-    if exist "%~dp0%%~f" (
-        copy /y "%~dp0%%~f" "!OLD_PATH!\" >nul
+    if exist "%%~f" (
+        copy /y "%%~f" "!OLD_PATH!\" >nul
     )
 )
 :: Copy data docs (but not the database)
 for %%f in ("ISSUES.md" "REQUIREMENTS_REMINDER.md" "REQUIREMENTS_WEB_SEARCH.md") do (
-    if exist "%~dp0data\%%~f" (
-        copy /y "%~dp0data\%%~f" "!OLD_PATH!\data\" >nul
+    if exist "data\%%~f" (
+        copy /y "data\%%~f" "!OLD_PATH!\data\" >nul
     )
 )
 echo.

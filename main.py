@@ -5,6 +5,11 @@ import os
 import sys
 from pathlib import Path
 
+# Add src/ to path so flat imports work from src directory.
+# When frozen (PyInstaller), modules are bundled in the archive — no path needed.
+if not getattr(sys, "frozen", False):
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
 import uvicorn
 
 from admin_api import app

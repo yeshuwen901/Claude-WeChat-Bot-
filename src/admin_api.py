@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 if getattr(sys, "frozen", False):
     STATIC_DIR = Path(sys._MEIPASS) / "static"
 else:
-    STATIC_DIR = Path(__file__).parent / "static"
+    STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 # Data (read-write) paths use config.data_dir — consistent with all other modules
 from config import config as _bot_config
@@ -99,10 +99,6 @@ async def get_config():
     key = cfg.get("api_key", "")
     if key:
         cfg["api_key"] = key[:8] + "****" + key[-4:] if len(key) > 12 else "****"
-    # Also mask DashScope key
-    dkey = cfg.get("dashscope_api_key", "")
-    if dkey:
-        cfg["dashscope_api_key"] = dkey[:8] + "****" + dkey[-4:] if len(dkey) > 12 else "****"
     return JSONResponse(cfg)
 
 
@@ -121,18 +117,65 @@ async def update_api_key(body: dict):
     raise HTTPException(400, "api_key is required")
 
 
-@app.put("/api/config/dashscope-apikey")
-async def update_dashscope_api_key(body: dict):
-    key = body.get("api_key", "").strip()
-    if key:
-        config_service.set_dashscope_api_key(key)
-        return JSONResponse({"ok": True, "masked": key[:8] + "****" + key[-4:] if len(key) > 12 else "****"})
-    raise HTTPException(400, "api_key is required")
+# ── model management ─────────────────────────────────────────────────
+
+@app.get("/api/models")
+async def list_models():
+    """Get all models with user config — keys masked."""
+    from model_registry import models_for_api, load_model_configs
+    configs = load_model_configs(config_service.get_model_configs_raw())
+    result = models_for_api(configs)
+    # Mask API keys
+    for r in result:
+        key = r.get("api_key", "")
+        if key:
+            r["api_key"] = key[:8] + "****" + key[-4:] if len(key) > 12 else "****"
+        r.pop("has_key", None)
+    return JSONResponse(result)
+
+
+@app.put("/api/models/{model_id}")
+async def update_model(model_id: str, body: dict):
+    """Update a single model's API key and enabled status."""
+    from model_registry import load_model_configs, dump_model_configs
+    configs = load_model_configs(config_service.get_model_configs_raw())
+    if model_id not in configs:
+        raise HTTPException(404, f"Unknown model: {model_id}")
+    mc = configs[model_id]
+    if "api_key" in body:
+        mc.api_key = body["api_key"].strip()
+    if "enabled" in body:
+        mc.enabled = bool(body["enabled"])
+    config_service.set_model_configs_raw(dump_model_configs(configs))
+    return JSONResponse({"ok": True})
+
+
+@app.put("/api/models/default")
+async def set_default_model(body: dict):
+    """Set the default model."""
+    model_id = body.get("model_id", "").strip()
+    if not model_id:
+        raise HTTPException(400, "model_id is required")
+    from model_registry import get_model_def
+    if not get_model_def(model_id):
+        raise HTTPException(404, f"Unknown model: {model_id}")
+    config_service.set_default_model(model_id)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/config/vision")
+async def get_vision_config():
+    return JSONResponse({"enabled": config_service.is_vision_enabled()})
+
+
+@app.put("/api/config/vision")
+async def update_vision_config(body: dict):
+    enabled = bool(body.get("enabled", True))
+    config_service.set_vision_enabled(enabled)
+    return JSONResponse({"ok": True, "enabled": enabled})
 
 
 # ── stickers ─────────────────────────────────────────────────────────
-
-@app.get("/api/stickers")
 async def list_stickers():
     return JSONResponse(db.list_stickers())
 

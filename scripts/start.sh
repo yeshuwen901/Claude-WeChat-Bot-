@@ -5,8 +5,7 @@
 # ================================================
 
 set -e
-cd "$(dirname "$0")"
-export PYTHONPATH="src:${PYTHONPATH}"
+cd "$(dirname "$0")/.."
 export PYTHONIOENCODING=utf-8
 export PYTHONUNBUFFERED=1
 
@@ -16,7 +15,7 @@ echo "================================================"
 echo ""
 
 while true; do
-    python3 src/main.py
+    python3 main.py
     EXITCODE=$?
     if [ "$EXITCODE" -eq 42 ]; then
         echo ""

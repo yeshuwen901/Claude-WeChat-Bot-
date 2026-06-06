@@ -1,7 +1,6 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0.."
 setlocal enabledelayedexpansion
-set PYTHONPATH=src
 set PYTHONIOENCODING=utf-8
 set PYTHONUNBUFFERED=1
 
@@ -69,12 +68,12 @@ if "!PYCMD!"=="" call :try_python_path "C:\Python311\python.exe"
 
 :: Auto-install bundled Python
 if "!PYCMD!"=="" (
-    if exist "%~dp0python-3.11.9-amd64.exe" (
+    if exist "python-3.11.9-amd64.exe" (
         echo.
         echo Python 3.11+ not found. Installing from bundled installer...
         echo This may take 1-2 minutes. Please wait...
         echo.
-        "%~dp0python-3.11.9-amd64.exe" /passive InstallAllUsers=0 PrependPath=1 Include_test=0 2>&1
+        "python-3.11.9-amd64.exe" /passive InstallAllUsers=0 PrependPath=1 Include_test=0 2>&1
         echo.
         if !ERRORLEVEL! equ 0 (
             echo Python 3.11.9 installation complete.
@@ -109,7 +108,7 @@ echo   Admin panel:  http://localhost:8080
 echo.
 
 :restart
-!PYCMD! -X utf8 src/main.py
+!PYCMD! -X utf8 main.py
 set EXITCODE=%ERRORLEVEL%
 if %EXITCODE% equ 42 (
     echo.

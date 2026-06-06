@@ -54,22 +54,35 @@ class ConfigService:
     def set_api_key(self, value: str):
         self._set("api_key", encrypt(value))
 
-    def get_dashscope_api_key(self) -> str:
-        """Get DashScope API key from DB (decrypted), fall back to env var."""
-        val = self._get("dashscope_api_key", "")
-        if val:
+    # ── model configs (multi-model support) ──────────────────────────────
+
+    def get_model_configs_raw(self) -> str:
+        """Get raw JSON of all model configs (decrypted)."""
+        from model_registry import dump_model_configs, DEFAULT_MODEL_CONFIGS
+        val = self._get("model_configs", "")
+        if not val:
+            return dump_model_configs(DEFAULT_MODEL_CONFIGS)
+        try:
             return decrypt(val)
-        import os
-        return os.getenv("DASHSCOPE_API_KEY", "")
+        except Exception:
+            return dump_model_configs(DEFAULT_MODEL_CONFIGS)
 
-    def set_dashscope_api_key(self, value: str):
-        self._set("dashscope_api_key", encrypt(value))
+    def set_model_configs_raw(self, raw: str):
+        self._set("model_configs", encrypt(raw))
 
-    def get_anthropic_model(self) -> str:
-        """Get AI model from DB, fall back to config (env)."""
-        from config import config
-        val = self._get("anthropic_model", "")
-        return val if val else config.anthropic_model
+    def get_default_model(self) -> str:
+        """Get the user's chosen default model id."""
+        return self._get("default_model", "")
+
+    def set_default_model(self, model_id: str):
+        self._set("default_model", model_id)
+
+    def is_vision_enabled(self) -> bool:
+        """Whether vision/image recognition is enabled globally."""
+        return self._get("vision_enabled", "1") == "1"
+
+    def set_vision_enabled(self, enabled: bool):
+        self._set("vision_enabled", "1" if enabled else "0")
 
     def is_deep_thinking_enabled(self) -> bool:
         return self._get("deep_thinking", "0") == "1"
@@ -321,14 +334,18 @@ class ConfigService:
 
     def get_all(self) -> dict[str, str]:
         cfg = db.get_all_config()
-        for key in ("api_key", "dashscope_api_key"):
+        for key in ("api_key",):
             if cfg.get(key):
                 cfg[key] = decrypt(cfg[key])
+        # Decrypt model keys
+        for key, val in list(cfg.items()):
+            if key.startswith("model_key_") and val:
+                cfg[key] = decrypt(val)
         return cfg
 
     def update_bulk(self, updates: dict[str, str]):
         for key, value in updates.items():
-            if key in ("api_key", "dashscope_api_key"):
+            if key in ("api_key",) or key.startswith("model_key_"):
                 value = encrypt(value)
             self._set(key, value)
 

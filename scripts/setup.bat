@@ -1,5 +1,5 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0.."
 setlocal enabledelayedexpansion
 
 echo.
@@ -52,12 +52,12 @@ if "!PYCMD!"=="" call :try_python_path "C:\Python311\python.exe"
 
 :: Phase 3 - Auto-install bundled Python if still not found
 if "!PYCMD!"=="" (
-    if exist "%~dp0python-3.11.9-amd64.exe" (
+    if exist "python-3.11.9-amd64.exe" (
         echo.
         echo Python 3.11+ not found. Installing from bundled installer...
         echo This may take 1-2 minutes. Please wait...
         echo.
-        "%~dp0python-3.11.9-amd64.exe" /passive InstallAllUsers=0 PrependPath=1 Include_test=0 2>&1
+        "python-3.11.9-amd64.exe" /passive InstallAllUsers=0 PrependPath=1 Include_test=0 2>&1
         echo.
         if !ERRORLEVEL! equ 0 (
             echo Python 3.11.9 installation complete.
@@ -140,7 +140,7 @@ if not exist .env (
 if not exist data mkdir data
 
 :: Try to run sticker generation (Pillow needed)
-.venv\Scripts\python.exe generate_stickers.py 2>nul
+.venv\Scripts\python.exe src\generate_stickers.py 2>nul
 if !ERRORLEVEL! neq 0 (
     echo   Sticker generation skipped - image library not available
     for %%e in (happy sad angry love surprised neutral) do (
